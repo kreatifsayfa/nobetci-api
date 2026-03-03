@@ -111,6 +111,13 @@ function parsePharmaciesFromMarkdown(md) {
       if (m) district = m[1].trim();
     }
 
+    // İlçe normalizasyonu
+    if (district) {
+      district = district.replace(/\s+/g, ' ').trim();
+      if (/^Merkez\s+/i.test(district)) district = 'Merkez';
+      if (/\s+Merkez$/i.test(district)) district = district.replace(/\s+Merkez$/i, '').trim() || 'Merkez';
+    }
+
     items.push({
       name,
       district,
@@ -146,9 +153,11 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'nobetci-api' });
 });
 
-app.get('/api/nobetci/cities', async (_req, res) => {
+app.get('/api/nobetci/cities', async (req, res) => {
   try {
-    const cities = await fetchCityIndex();
+    const includeKktc = String(req.query.includeKktc || 'false') === 'true';
+    const allCities = await fetchCityIndex();
+    const cities = includeKktc ? allCities : allCities.filter((c) => c.slug !== 'kibris');
     res.json({ ok: true, count: cities.length, cities, fetchedAt: new Date().toISOString() });
   } catch (e) {
     res.status(502).json({ ok: false, error: e.message });
@@ -167,8 +176,10 @@ app.get('/api/nobetci/:city', async (req, res) => {
 
 app.get('/api/nobetci-all', async (req, res) => {
   try {
-    const cities = await fetchCityIndex();
-    const limit = Math.max(1, Math.min(81, Number(req.query.limit || 81)));
+    const includeKktc = String(req.query.includeKktc || 'false') === 'true';
+    const allCities = await fetchCityIndex();
+    const cities = includeKktc ? allCities : allCities.filter((c) => c.slug !== 'kibris');
+    const limit = Math.max(1, Math.min(cities.length, Number(req.query.limit || cities.length)));
     const selected = cities.slice(0, limit);
 
     const results = [];
