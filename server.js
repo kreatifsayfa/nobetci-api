@@ -66,7 +66,7 @@ function parsePharmaciesFromMarkdown(md) {
     const next = matches[i + 1];
 
     const name = cur[1].trim();
-    const detailUrl = cur[2].trim();
+
 
     const start = (cur.index ?? 0) + cur[0].length;
     const end = next ? (next.index ?? cleaned.length) : cleaned.length;
@@ -116,8 +116,7 @@ function parsePharmaciesFromMarkdown(md) {
       district,
       phone,
       address,
-      note,
-      detailUrl
+      note
     });
   }
 
@@ -134,7 +133,6 @@ async function fetchCityPharmacies(slug) {
   const out = {
     ok: true,
     citySlug: slug,
-    source: `${ORIGIN}/nobetci-${slug}`,
     fetchedAt: new Date().toISOString(),
     count: pharmacies.length,
     pharmacies
@@ -145,7 +143,7 @@ async function fetchCityPharmacies(slug) {
 }
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'nobetci-api', source: 'eczaneler.gen.tr (via r.jina.ai)' });
+  res.json({ ok: true, service: 'nobetci-api' });
 });
 
 app.get('/api/nobetci/cities', async (_req, res) => {
@@ -185,7 +183,6 @@ app.get('/api/nobetci-all', async (req, res) => {
 
     res.json({
       ok: true,
-      source: `${ORIGIN}`,
       fetchedAt: new Date().toISOString(),
       cityCount: results.length,
       totalPharmacies: results.reduce((a, b) => a + (b.count || 0), 0),
