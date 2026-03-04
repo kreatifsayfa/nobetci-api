@@ -52,29 +52,58 @@ async function fetchCityIndex() {
   return cities;
 }
 
-function parseDateInfo(md) {
-  const text = md.replace(/\s+/g, ' ');
-
-  const dateLines = [];
-  const re = /(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)(?:\s+akşamından)?\s+\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\s+sabahına\s+kadar)/gi;
-  for (const m of text.matchAll(re)) dateLines.push(m[1]);
-
-  const todayPattern = /(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar))/i;
-  const tm = text.match(todayPattern);
-
-  return {
-    dutyRangeText: dateLines[0] || null,
-    pageDateText: tm ? tm[1] : null
-  };
-}
-
-function parsePharmaciesFromMarkdown(md) {
+function splitDutySections(md) {
   const cleaned = md
     .replace(/!\[Image[^\]]*\]\([^\)]*\)/g, '')
     .replace(/\r/g, '');
 
+  const rangeRe = /(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(?:Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\s+akşamından\s+\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(?:Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\s+sabahına\s+kadar\.?)/gi;
+  const ranges = [...cleaned.matchAll(rangeRe)].map((m) => ({ text: m[1], idx: m.index || 0 }));
+
+  if (!ranges.length) return [{ rangeText: null, block: cleaned }];
+
+  const out = [];
+  for (let i = 0; i < ranges.length; i++) {
+    const start = ranges[i].idx + ranges[i].text.length;
+    const end = i + 1 < ranges.length ? ranges[i + 1].idx : cleaned.length;
+    out.push({ rangeText: ranges[i].text, block: cleaned.slice(start, end) });
+  }
+  return out;
+}
+
+function pickActiveSection(md) {
+  const sections = splitDutySections(md);
+  const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
+  const now = new Date();
+  const tomorrow = new Date(Date.now() + 24*60*60*1000);
+  const markerToday = `${now.getDate()} ${trMonths[now.getMonth()]}`;
+  const markerTomorrow = `${tomorrow.getDate()} ${trMonths[tomorrow.getMonth()]}`;
+
+  let selected = sections.find((s) => {
+    const t = (s.rangeText || '').toLowerCase();
+    return t.includes(markerToday) && t.includes(markerTomorrow);
+  });
+
+  if (!selected) {
+    selected = sections.find((s) => (s.rangeText || '').toLowerCase().includes(markerToday));
+  }
+
+  if (!selected) selected = sections[sections.length - 1];
+
+  const pageDateMatch = md.replace(/\s+/g, ' ').match(/\((\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(?:Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar))\)/i);
+
+  return {
+    dutyRangeText: selected?.rangeText || null,
+    pageDateText: pageDateMatch ? pageDateMatch[1] : null,
+    block: selected?.block || md,
+    sectionsCount: sections.length
+  };
+}
+
+function parsePharmaciesFromMarkdown(block) {
+
   const linkRe = /\[([^\]]+)\]\((https?:\/\/www\.eczaneler\.gen\.tr\/eczane\/[^)]+)\)/g;
-  const matches = [...cleaned.matchAll(linkRe)];
+  const matches = [...block.matchAll(linkRe)];
   const items = [];
 
   for (let i = 0; i < matches.length; i++) {
@@ -85,10 +114,10 @@ function parsePharmaciesFromMarkdown(md) {
 
 
     const start = (cur.index ?? 0) + cur[0].length;
-    const end = next ? (next.index ?? cleaned.length) : cleaned.length;
-    const block = cleaned.slice(start, end);
+    const end = next ? (next.index ?? block.length) : block.length;
+    const rowBlock = block.slice(start, end);
 
-    const lines = block
+    const lines = rowBlock
       .split('\n')
       .map((l) => l.replace(/[*_`>#]/g, '').trim())
       .filter(Boolean);
@@ -152,16 +181,17 @@ async function fetchCityPharmacies(slug) {
   if (cached) return cached;
 
   const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
-  const pharmacies = parsePharmaciesFromMarkdown(md);
-  const dateInfo = parseDateInfo(md);
+  const active = pickActiveSection(md);
+  const pharmacies = parsePharmaciesFromMarkdown(active.block);
 
   const out = {
     ok: true,
     citySlug: slug,
     fetchedAt: new Date().toISOString(),
     count: pharmacies.length,
-    dutyRangeText: dateInfo.dutyRangeText,
-    pageDateText: dateInfo.pageDateText,
+    dutyRangeText: active.dutyRangeText,
+    pageDateText: active.pageDateText,
+    sectionsCount: active.sectionsCount,
     stale: false,
     pharmacies
   };
@@ -173,7 +203,7 @@ async function fetchCityPharmacies(slug) {
   const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
   const markerToday = fmt(now);
   const markerTomorrow = fmt(tomorrow);
-  const fullText = `${dateInfo.dutyRangeText || ''} ${dateInfo.pageDateText || ''}`.toLowerCase();
+  const fullText = `${active.dutyRangeText || ''} ${active.pageDateText || ''}`.toLowerCase();
   if (fullText && !fullText.includes(markerToday) && !fullText.includes(markerTomorrow)) {
     out.stale = true;
   }
