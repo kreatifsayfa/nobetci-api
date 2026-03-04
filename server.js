@@ -45,7 +45,7 @@ async function fetchCityIndex() {
     const href = m[2].trim();
     const count = Number(m[3] || 0);
     const slug = href.split('/').pop().replace('nobetci-', '');
-    cities.push({ city, slug, href, approxCount: count });
+    cities.push({ city, slug, approxCount: count });
   }
 
   setCache(key, cities);
