@@ -175,10 +175,14 @@ function parsePharmaciesFromMarkdown(block) {
   return items;
 }
 
-async function fetchCityPharmacies(slug) {
+async function fetchCityPharmacies(slug, forceRefresh = false) {
   const key = `city:${slug}`;
-  const cached = getCache(key);
-  if (cached) return cached;
+  if (!forceRefresh) {
+    const cached = getCache(key);
+    if (cached) return cached;
+  } else {
+    cache.delete(key);
+  }
 
   const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
   const active = pickActiveSection(md);
@@ -230,10 +234,10 @@ app.get('/api/nobetci/cities', async (req, res) => {
 app.get('/api/nobetci/:city', async (req, res) => {
   try {
     const slug = String(req.params.city || '').toLowerCase().trim();
-    const refresh = String(req.query.refresh || 'false') === 'true';
-    if (refresh) cache.delete(`city:${slug}`);
+    // Varsayılanı true yaptık: her istek güncel çekim
+    const refresh = String(req.query.refresh || 'true') === 'true';
 
-    const data = await fetchCityPharmacies(slug);
+    const data = await fetchCityPharmacies(slug, refresh);
     res.json(data);
   } catch (e) {
     res.status(502).json({ ok: false, error: e.message });
