@@ -1,83 +1,81 @@
 # Nöbetçi Eczane API (Türkiye Geneli)
 
-Türkiye'deki nöbetçi eczane verilerini şehir bazında JSON olarak sunar.
+Canlı servis: `https://nobetci-eczane.kreatif.tr`
 
-## Canlı API
+Bu API artık **API key + domain doğrulama + attribution denetimi** ile çalışır.
 
-Base URL:
+## Attribution Kuralı
+API kullanan sitede görünür şekilde şu ifade bulunmalıdır:
 
-`https://nobetci-eczane.kreatif.tr`
+`Developed by kreatif.tr`
 
-### Hızlı test
-
-- Sağlık kontrolü:  
-  `https://nobetci-eczane.kreatif.tr/health`
-- Adıyaman örneği:  
-  `https://nobetci-eczane.kreatif.tr/api/nobetci/adiyaman`
-- Şehir listesi:  
-  `https://nobetci-eczane.kreatif.tr/api/nobetci/cities`
+Periyodik denetimde bu ifade yoksa istemci key'i otomatik `blocked` olur.
 
 ---
 
-## Endpointler
+## Genel endpointler
 
-### `GET /health`
-Servis ayakta mı kontrolü.
+- `GET /health`
+- `GET /api/nobetci/cities`
+- `GET /api/nobetci/:city`
+- `GET /api/nobetci-all?limit=81`
 
-### `GET /api/nobetci/cities`
-Tüm şehirlerin slug listesini döner (varsayılan Türkiye 81 il).
+> `/api/*` çağrılarında `x-api-key` zorunludur.
 
-Opsiyonel:
-- `includeKktc=true` → KKTC'yi de listeye dahil eder.
-
-### `GET /api/nobetci/:city`
-Belirli bir şehir için nöbetçi eczaneleri döner.
-
-Örnekler:
-- `/api/nobetci/adiyaman`
-- `/api/nobetci/ankara`
-- `/api/nobetci/izmir`
-
-Not:
-- Endpoint varsayılan olarak **taze veri** çekmek üzere ayarlanmıştır.
-- İstersen yine de `?refresh=true` verebilirsin.
-
-### `GET /api/nobetci-all?limit=81`
-Birden fazla şehrin verisini tek cevapta döner.
-
----
-
-## Yanıt alanları
-
-Şehir endpointinde (`/api/nobetci/:city`) şu alanlar döner:
-
-- `fetchedAt` → verinin çekildiği zaman
-- `dutyRangeText` → kaynak sayfadaki nöbet aralığı metni
-- `pageDateText` → kaynak sayfadaki tarih metni
-- `sectionsCount` → kaynakta tespit edilen nöbet blok sayısı
-- `stale` → tarih uyuşmazlığı şüphesinde `true`
-- `pharmacies[]`:
-  - `name`
-  - `district`
-  - `phone`
-  - `address`
-  - `note`
-
----
-
-## Lokal kurulum (opsiyonel)
-
+Örnek:
 ```bash
-cd nobetci-api
-npm install
-npm start
+curl 'https://nobetci-eczane.kreatif.tr/api/nobetci/adiyaman' \
+  -H 'x-api-key: YOUR_KEY' \
+  -H 'x-client-domain: example.com'
 ```
 
-Lokalde varsayılan port: `8787`
+---
 
-Lokal test:
+## Admin endpointleri (x-admin-token gerekli)
 
+- `POST /admin/client`
+- `PATCH /admin/client/:key`
+- `GET /admin/clients`
+
+### 1) Client oluştur
 ```bash
-curl http://127.0.0.1:8787/health
-curl http://127.0.0.1:8787/api/nobetci/adiyaman
+curl -X POST 'https://nobetci-eczane.kreatif.tr/admin/client' \
+  -H 'content-type: application/json' \
+  -H 'x-admin-token: ADMIN_TOKEN' \
+  -d '{
+    "key":"CLIENT_KEY_123",
+    "name":"my-site",
+    "domains":["example.com"],
+    "requireAttribution":true
+  }'
 ```
+
+### 2) Client durum/domain güncelle
+```bash
+curl -X PATCH 'https://nobetci-eczane.kreatif.tr/admin/client/CLIENT_KEY_123' \
+  -H 'content-type: application/json' \
+  -H 'x-admin-token: ADMIN_TOKEN' \
+  -d '{"status":"active","domains":["example.com","www.example.com"]}'
+```
+
+### 3) Client listesi
+```bash
+curl 'https://nobetci-eczane.kreatif.tr/admin/clients' \
+  -H 'x-admin-token: ADMIN_TOKEN'
+```
+
+---
+
+## Environment
+
+- `PORT` (default `8787`)
+- `ADMIN_TOKEN` (zorunlu, prod'da değiştir)
+
+---
+
+## Not
+
+`/api/nobetci/:city` varsayılan olarak taze veri çeker (refresh davranışı aktif). Tarih alanları:
+- `dutyRangeText`
+- `pageDateText`
+- `stale`
