@@ -52,6 +52,22 @@ async function fetchCityIndex() {
   return cities;
 }
 
+function parseDateInfo(md) {
+  const text = md.replace(/\s+/g, ' ');
+
+  const dateLines = [];
+  const re = /(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)(?:\s+akşamından)?\s+\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\s+sabahına\s+kadar)/gi;
+  for (const m of text.matchAll(re)) dateLines.push(m[1]);
+
+  const todayPattern = /(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar))/i;
+  const tm = text.match(todayPattern);
+
+  return {
+    dutyRangeText: dateLines[0] || null,
+    pageDateText: tm ? tm[1] : null
+  };
+}
+
 function parsePharmaciesFromMarkdown(md) {
   const cleaned = md
     .replace(/!\[Image[^\]]*\]\([^\)]*\)/g, '')
@@ -137,13 +153,30 @@ async function fetchCityPharmacies(slug) {
 
   const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
   const pharmacies = parsePharmaciesFromMarkdown(md);
+  const dateInfo = parseDateInfo(md);
+
   const out = {
     ok: true,
     citySlug: slug,
     fetchedAt: new Date().toISOString(),
     count: pharmacies.length,
+    dutyRangeText: dateInfo.dutyRangeText,
+    pageDateText: dateInfo.pageDateText,
+    stale: false,
     pharmacies
   };
+
+  // Basit stale kontrolü: sayfada bugün/yarın metni yoksa şüpheli kabul et
+  const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
+  const now = new Date();
+  const tomorrow = new Date(Date.now() + 24*60*60*1000);
+  const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
+  const markerToday = fmt(now);
+  const markerTomorrow = fmt(tomorrow);
+  const fullText = `${dateInfo.dutyRangeText || ''} ${dateInfo.pageDateText || ''}`.toLowerCase();
+  if (fullText && !fullText.includes(markerToday) && !fullText.includes(markerTomorrow)) {
+    out.stale = true;
+  }
 
   setCache(key, out);
   return out;
@@ -167,6 +200,9 @@ app.get('/api/nobetci/cities', async (req, res) => {
 app.get('/api/nobetci/:city', async (req, res) => {
   try {
     const slug = String(req.params.city || '').toLowerCase().trim();
+    const refresh = String(req.query.refresh || 'false') === 'true';
+    if (refresh) cache.delete(`city:${slug}`);
+
     const data = await fetchCityPharmacies(slug);
     res.json(data);
   } catch (e) {

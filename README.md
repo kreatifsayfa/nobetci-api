@@ -14,6 +14,12 @@ npm start
 
 - `GET /health`
 - `GET /api/nobetci/adiyaman`
+- `GET /api/nobetci/adiyaman?refresh=true` (cache bypass)
+
+Dönen yanıtta tarih doğrulama alanları:
+- `dutyRangeText`
+- `pageDateText`
+- `stale` (true ise kaynak tarihi bugün/yarınla uyuşmuyor olabilir)
 
 Örnek:
 
