@@ -45,6 +45,9 @@ Not:
 ### `GET /api/nobetci-all?limit=81`
 Birden fazla şehrin verisini tek cevapta döner.
 
+Not:
+- Varsayılan olarak her şehir için **taze veri** çekilir (`refresh=true`).
+
 ---
 
 ## Yanıt alanları
@@ -81,3 +84,12 @@ Lokal test:
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/api/nobetci/adiyaman
 ```
+
+
+## Otomatik güncelleme
+
+Sunucu açıldığında şehir verileri arka planda otomatik yenilenir ve belirli aralıklarla tekrar çekilir.
+
+Environment değişkenleri:
+- `ENABLE_CITY_AUTO_REFRESH=true|false` (varsayılan: `true`)
+- `CITY_AUTO_REFRESH_MS` (varsayılan: `300000` = 5 dakika)

@@ -6,12 +6,26 @@ const PORT = process.env.PORT || 8787;
 const ORIGIN = 'http://www.eczaneler.gen.tr';
 const PROXY_PREFIX = 'https://r.jina.ai/http://www.eczaneler.gen.tr';
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const CITY_AUTO_REFRESH_MS = Number(process.env.CITY_AUTO_REFRESH_MS || 5 * 60 * 1000);
+const ENABLE_CITY_AUTO_REFRESH = String(process.env.ENABLE_CITY_AUTO_REFRESH || 'true') === 'true';
 
 const cache = new Map();
 
 async function fetchText(url) {
-  const res = await fetch(url, {
-    headers: { 'user-agent': 'Mozilla/5.0' }
+  const bust = `_=${Date.now()}`;
+  const sep = url.includes('?') ? '&' : '?';
+  const cacheSafeUrl = `${url}${sep}${bust}`;
+
+  const res = await fetch(cacheSafeUrl, {
+    // r.jina.ai üzerinde agresif cache'i azaltmak için cache-busting query ekliyoruz
+    // ve ara katman cache'lerini baypas etmeye çalışıyoruz.
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      'user-agent': 'Mozilla/5.0',
+      'cache-control': 'no-cache, no-store, max-age=0',
+      pragma: 'no-cache'
+    }
   });
   if (!res.ok) throw new Error(`Kaynak hatası: ${res.status}`);
   return await res.text();
@@ -216,6 +230,36 @@ async function fetchCityPharmacies(slug, forceRefresh = false) {
   return out;
 }
 
+
+async function refreshAllCities() {
+  const allCities = await fetchCityIndex();
+  const cities = allCities.filter((c) => c.slug !== 'kibris');
+
+  for (const city of cities) {
+    try {
+      await fetchCityPharmacies(city.slug, true);
+    } catch (e) {
+      console.error(`[refresh] ${city.slug} yenilenemedi: ${e.message}`);
+    }
+  }
+
+  console.log(`[refresh] ${cities.length} şehir güncellendi`);
+}
+
+function startAutoRefresh() {
+  if (!ENABLE_CITY_AUTO_REFRESH) return;
+
+  refreshAllCities().catch((e) => {
+    console.error(`[refresh] ilk yenileme hatası: ${e.message}`);
+  });
+
+  setInterval(() => {
+    refreshAllCities().catch((e) => {
+      console.error(`[refresh] periyodik yenileme hatası: ${e.message}`);
+    });
+  }, CITY_AUTO_REFRESH_MS);
+}
+
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'nobetci-api' });
 });
@@ -255,7 +299,8 @@ app.get('/api/nobetci-all', async (req, res) => {
     const results = [];
     for (const c of selected) {
       try {
-        const cityData = await fetchCityPharmacies(c.slug);
+        const refresh = String(req.query.refresh || 'true') === 'true';
+        const cityData = await fetchCityPharmacies(c.slug, refresh);
         results.push({ city: c.city, slug: c.slug, count: cityData.count, pharmacies: cityData.pharmacies });
       } catch (e) {
         results.push({ city: c.city, slug: c.slug, ok: false, error: e.message, pharmacies: [] });
@@ -273,6 +318,8 @@ app.get('/api/nobetci-all', async (req, res) => {
     res.status(502).json({ ok: false, error: e.message });
   }
 });
+
+startAutoRefresh();
 
 app.listen(PORT, () => {
   console.log(`nobetci-api running on :${PORT}`);
