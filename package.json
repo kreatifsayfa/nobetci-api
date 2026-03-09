@@ -4,7 +4,8 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check:conflicts": "sh -c \"! rg -n '^(<{7}|={7}|>{7})' -g '!node_modules/**' .\""
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",

@@ -98,3 +98,12 @@ Sunucu açıldığında şehir verileri arka planda otomatik yenilenir ve belirl
 Environment değişkenleri:
 - `ENABLE_CITY_AUTO_REFRESH=true|false` (varsayılan: `true`)
 - `CITY_AUTO_REFRESH_MS` (varsayılan: `300000` = 5 dakika)
+
+
+### Merge conflict kontrolü
+
+Merge sırasında kalan conflict marker hatalarını hızlıca yakalamak için:
+
+```bash
+npm run check:conflicts
+```
