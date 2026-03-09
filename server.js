@@ -240,21 +240,7 @@ async function fetchCityPharmacies(slug, forceRefresh = false) {
       };
     }
 
-    // Hiç cache yoksa bile 502 yerine kontrollü boş cevap dönüp servisi ayakta tut.
-    return {
-      ok: false,
-      citySlug: slug,
-      fetchedAt: new Date().toISOString(),
-      count: 0,
-      dutyRangeText: null,
-      pageDateText: null,
-      sectionsCount: 0,
-      stale: true,
-      fromCacheFallback: true,
-      fallbackReason: e.message,
-      fallbackAt: new Date().toISOString(),
-      pharmacies: []
-    };
+    throw e;
   }
 }
 
