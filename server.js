@@ -191,43 +191,87 @@ function parsePharmaciesFromMarkdown(block) {
 
 async function fetchCityPharmacies(slug, forceRefresh = false) {
   const key = `city:${slug}`;
-  if (!forceRefresh) {
-    const cached = getCache(key);
-    if (cached) return cached;
-  } else {
-    cache.delete(key);
+  const cached = getCache(key);
+
+  if (!forceRefresh && cached) {
+    return cached;
   }
 
-  const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
-  const active = pickActiveSection(md);
-  const pharmacies = parsePharmaciesFromMarkdown(active.block);
+  try {
+    const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
+    const active = pickActiveSection(md);
+    const pharmacies = parsePharmaciesFromMarkdown(active.block);
 
-  const out = {
-    ok: true,
-    citySlug: slug,
-    fetchedAt: new Date().toISOString(),
-    count: pharmacies.length,
-    dutyRangeText: active.dutyRangeText,
-    pageDateText: active.pageDateText,
-    sectionsCount: active.sectionsCount,
-    stale: false,
-    pharmacies
-  };
+    const out = {
+      ok: true,
+      citySlug: slug,
+      fetchedAt: new Date().toISOString(),
+      count: pharmacies.length,
+      dutyRangeText: active.dutyRangeText,
+      pageDateText: active.pageDateText,
+      sectionsCount: active.sectionsCount,
+      stale: false,
+      fromCacheFallback: false,
+      pharmacies
+    };
 
-  // Basit stale kontrolü: sayfada bugün/yarın metni yoksa şüpheli kabul et
-  const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
-  const now = new Date();
-  const tomorrow = new Date(Date.now() + 24*60*60*1000);
-  const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
-  const markerToday = fmt(now);
-  const markerTomorrow = fmt(tomorrow);
-  const fullText = `${active.dutyRangeText || ''} ${active.pageDateText || ''}`.toLowerCase();
-  if (fullText && !fullText.includes(markerToday) && !fullText.includes(markerTomorrow)) {
-    out.stale = true;
+    // Basit stale kontrolü: sayfada bugün/yarın metni yoksa şüpheli kabul et
+    const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
+    const now = new Date();
+    const tomorrow = new Date(Date.now() + 24*60*60*1000);
+    const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
+    const markerToday = fmt(now);
+    const markerTomorrow = fmt(tomorrow);
+    const fullText = `${active.dutyRangeText || ''} ${active.pageDateText || ''}`.toLowerCase();
+    if (fullText && !fullText.includes(markerToday) && !fullText.includes(markerTomorrow)) {
+      out.stale = true;
+    }
+
+    setCache(key, out);
+    return out;
+  } catch (e) {
+    if (cached) {
+      return {
+        ...cached,
+        stale: true,
+        fromCacheFallback: true,
+        fallbackReason: e.message,
+        fallbackAt: new Date().toISOString()
+      };
+    }
+
+    throw e;
+  }
+}
+
+
+async function refreshAllCities() {
+  const allCities = await fetchCityIndex();
+  const cities = allCities.filter((c) => c.slug !== 'kibris');
+
+  for (const city of cities) {
+    try {
+      await fetchCityPharmacies(city.slug, true);
+    } catch (e) {
+      console.error(`[refresh] ${city.slug} yenilenemedi: ${e.message}`);
+    }
   }
 
-  setCache(key, out);
-  return out;
+  console.log(`[refresh] ${cities.length} şehir güncellendi`);
+}
+
+function startAutoRefresh() {
+  if (!ENABLE_CITY_AUTO_REFRESH) return;
+
+  refreshAllCities().catch((e) => {
+    console.error(`[refresh] ilk yenileme hatası: ${e.message}`);
+  });
+
+  setInterval(() => {
+    refreshAllCities().catch((e) => {
+      console.error(`[refresh] periyodik yenileme hatası: ${e.message}`);
+    });
+  }, CITY_AUTO_REFRESH_MS);
 }
 
 

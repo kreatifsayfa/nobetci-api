@@ -58,7 +58,8 @@ Not:
 - `dutyRangeText` → kaynak sayfadaki nöbet aralığı metni
 - `pageDateText` → kaynak sayfadaki tarih metni
 - `sectionsCount` → kaynakta tespit edilen nöbet blok sayısı
-- `stale` → tarih uyuşmazlığı şüphesinde `true`
+- `stale` → tarih uyuşmazlığı veya kaynak erişim hatası sonrası cache fallback durumunda `true`
+- `fromCacheFallback` → canlı çekim başarısız olup cache verisi döndüyse `true`
 - `pharmacies[]`:
   - `name`
   - `district`
