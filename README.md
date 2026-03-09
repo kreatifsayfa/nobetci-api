@@ -45,7 +45,14 @@ Not:
 ### `GET /api/nobetci-all?limit=81`
 Birden fazla şehrin verisini tek cevapta döner.
 
+Not:
+- Varsayılan olarak her şehir için **taze veri** çekilir (`refresh=true`).
+
 ---
+
+Not:
+- Kaynak site geçici olarak erişilemezse API 502 yerine `ok:false` ve güvenli boş/fallback payload döner.
+- Bu durumda `fromCacheFallback=true` olabilir ve `fallbackReason` alanı hata sebebini taşır.
 
 ## Yanıt alanları
 
@@ -55,7 +62,8 @@ Birden fazla şehrin verisini tek cevapta döner.
 - `dutyRangeText` → kaynak sayfadaki nöbet aralığı metni
 - `pageDateText` → kaynak sayfadaki tarih metni
 - `sectionsCount` → kaynakta tespit edilen nöbet blok sayısı
-- `stale` → tarih uyuşmazlığı şüphesinde `true`
+- `stale` → tarih uyuşmazlığı veya kaynak erişim hatası sonrası cache fallback durumunda `true`
+- `fromCacheFallback` → canlı çekim başarısız olup cache verisi döndüyse `true`
 - `pharmacies[]`:
   - `name`
   - `district`
@@ -81,3 +89,12 @@ Lokal test:
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/api/nobetci/adiyaman
 ```
+
+
+## Otomatik güncelleme
+
+Sunucu açıldığında şehir verileri arka planda otomatik yenilenir ve belirli aralıklarla tekrar çekilir.
+
+Environment değişkenleri:
+- `ENABLE_CITY_AUTO_REFRESH=true|false` (varsayılan: `true`)
+- `CITY_AUTO_REFRESH_MS` (varsayılan: `300000` = 5 dakika)
