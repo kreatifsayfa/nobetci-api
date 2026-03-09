@@ -6,12 +6,26 @@ const PORT = process.env.PORT || 8787;
 const ORIGIN = 'http://www.eczaneler.gen.tr';
 const PROXY_PREFIX = 'https://r.jina.ai/http://www.eczaneler.gen.tr';
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const CITY_AUTO_REFRESH_MS = Number(process.env.CITY_AUTO_REFRESH_MS || 5 * 60 * 1000);
+const ENABLE_CITY_AUTO_REFRESH = String(process.env.ENABLE_CITY_AUTO_REFRESH || 'true') === 'true';
 
 const cache = new Map();
 
 async function fetchText(url) {
-  const res = await fetch(url, {
-    headers: { 'user-agent': 'Mozilla/5.0' }
+  const bust = `_=${Date.now()}`;
+  const sep = url.includes('?') ? '&' : '?';
+  const cacheSafeUrl = `${url}${sep}${bust}`;
+
+  const res = await fetch(cacheSafeUrl, {
+    // r.jina.ai üzerinde agresif cache'i azaltmak için cache-busting query ekliyoruz
+    // ve ara katman cache'lerini baypas etmeye çalışıyoruz.
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      'user-agent': 'Mozilla/5.0',
+      'cache-control': 'no-cache, no-store, max-age=0',
+      pragma: 'no-cache'
+    }
   });
   if (!res.ok) throw new Error(`Kaynak hatası: ${res.status}`);
   return await res.text();
@@ -177,43 +191,87 @@ function parsePharmaciesFromMarkdown(block) {
 
 async function fetchCityPharmacies(slug, forceRefresh = false) {
   const key = `city:${slug}`;
-  if (!forceRefresh) {
-    const cached = getCache(key);
-    if (cached) return cached;
-  } else {
-    cache.delete(key);
+  const cached = getCache(key);
+
+  if (!forceRefresh && cached) {
+    return cached;
   }
 
-  const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
-  const active = pickActiveSection(md);
-  const pharmacies = parsePharmaciesFromMarkdown(active.block);
+  try {
+    const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
+    const active = pickActiveSection(md);
+    const pharmacies = parsePharmaciesFromMarkdown(active.block);
 
-  const out = {
-    ok: true,
-    citySlug: slug,
-    fetchedAt: new Date().toISOString(),
-    count: pharmacies.length,
-    dutyRangeText: active.dutyRangeText,
-    pageDateText: active.pageDateText,
-    sectionsCount: active.sectionsCount,
-    stale: false,
-    pharmacies
-  };
+    const out = {
+      ok: true,
+      citySlug: slug,
+      fetchedAt: new Date().toISOString(),
+      count: pharmacies.length,
+      dutyRangeText: active.dutyRangeText,
+      pageDateText: active.pageDateText,
+      sectionsCount: active.sectionsCount,
+      stale: false,
+      fromCacheFallback: false,
+      pharmacies
+    };
 
-  // Basit stale kontrolü: sayfada bugün/yarın metni yoksa şüpheli kabul et
-  const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
-  const now = new Date();
-  const tomorrow = new Date(Date.now() + 24*60*60*1000);
-  const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
-  const markerToday = fmt(now);
-  const markerTomorrow = fmt(tomorrow);
-  const fullText = `${active.dutyRangeText || ''} ${active.pageDateText || ''}`.toLowerCase();
-  if (fullText && !fullText.includes(markerToday) && !fullText.includes(markerTomorrow)) {
-    out.stale = true;
+    // Basit stale kontrolü: sayfada bugün/yarın metni yoksa şüpheli kabul et
+    const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
+    const now = new Date();
+    const tomorrow = new Date(Date.now() + 24*60*60*1000);
+    const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
+    const markerToday = fmt(now);
+    const markerTomorrow = fmt(tomorrow);
+    const fullText = `${active.dutyRangeText || ''} ${active.pageDateText || ''}`.toLowerCase();
+    if (fullText && !fullText.includes(markerToday) && !fullText.includes(markerTomorrow)) {
+      out.stale = true;
+    }
+
+    setCache(key, out);
+    return out;
+  } catch (e) {
+    if (cached) {
+      return {
+        ...cached,
+        stale: true,
+        fromCacheFallback: true,
+        fallbackReason: e.message,
+        fallbackAt: new Date().toISOString()
+      };
+    }
+
+    throw e;
+  }
+}
+
+
+async function refreshAllCities() {
+  const allCities = await fetchCityIndex();
+  const cities = allCities.filter((c) => c.slug !== 'kibris');
+
+  for (const city of cities) {
+    try {
+      await fetchCityPharmacies(city.slug, true);
+    } catch (e) {
+      console.error(`[refresh] ${city.slug} yenilenemedi: ${e.message}`);
+    }
   }
 
-  setCache(key, out);
-  return out;
+  console.log(`[refresh] ${cities.length} şehir güncellendi`);
+}
+
+function startAutoRefresh() {
+  if (!ENABLE_CITY_AUTO_REFRESH) return;
+
+  refreshAllCities().catch((e) => {
+    console.error(`[refresh] ilk yenileme hatası: ${e.message}`);
+  });
+
+  setInterval(() => {
+    refreshAllCities().catch((e) => {
+      console.error(`[refresh] periyodik yenileme hatası: ${e.message}`);
+    });
+  }, CITY_AUTO_REFRESH_MS);
 }
 
 app.get('/health', (_req, res) => {
@@ -255,7 +313,8 @@ app.get('/api/nobetci-all', async (req, res) => {
     const results = [];
     for (const c of selected) {
       try {
-        const cityData = await fetchCityPharmacies(c.slug);
+        const refresh = String(req.query.refresh || 'true') === 'true';
+        const cityData = await fetchCityPharmacies(c.slug, refresh);
         results.push({ city: c.city, slug: c.slug, count: cityData.count, pharmacies: cityData.pharmacies });
       } catch (e) {
         results.push({ city: c.city, slug: c.slug, ok: false, error: e.message, pharmacies: [] });
@@ -273,6 +332,8 @@ app.get('/api/nobetci-all', async (req, res) => {
     res.status(502).json({ ok: false, error: e.message });
   }
 });
+
+startAutoRefresh();
 
 app.listen(PORT, () => {
   console.log(`nobetci-api running on :${PORT}`);
