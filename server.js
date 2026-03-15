@@ -1,30 +1,31 @@
 import express from 'express';
+import * as cheerio from 'cheerio';
 
 const app = express();
 const PORT = process.env.PORT || 8787;
 
-const ORIGIN = 'http://www.eczaneler.gen.tr';
-const PROXY_PREFIX = 'https://r.jina.ai/http://www.eczaneler.gen.tr';
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const CITY_AUTO_REFRESH_MS = Number(process.env.CITY_AUTO_REFRESH_MS || 5 * 60 * 1000);
+const ORIGIN = 'https://www.eczaneler.gen.tr';
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 saat
 const ENABLE_CITY_AUTO_REFRESH = String(process.env.ENABLE_CITY_AUTO_REFRESH || 'true') === 'true';
+const REFRESH_HOURS = [12, 23]; // İstanbul GMT+3 saat 12:00 ve 23:59
+const REFRESH_MINUTE = 59; // 23:59 için dakika
 
 const cache = new Map();
 
-async function fetchText(url) {
+async function fetchHTML(url) {
   const bust = `_=${Date.now()}`;
   const sep = url.includes('?') ? '&' : '?';
   const cacheSafeUrl = `${url}${sep}${bust}`;
 
   const res = await fetch(cacheSafeUrl, {
-    // r.jina.ai üzerinde agresif cache'i azaltmak için cache-busting query ekliyoruz
-    // ve ara katman cache'lerini baypas etmeye çalışıyoruz.
     method: 'GET',
     cache: 'no-store',
     headers: {
-      'user-agent': 'Mozilla/5.0',
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
       'cache-control': 'no-cache, no-store, max-age=0',
-      pragma: 'no-cache'
+      'pragma': 'no-cache'
     }
   });
   if (!res.ok) throw new Error(`Kaynak hatası: ${res.status}`);
@@ -50,143 +51,23 @@ async function fetchCityIndex() {
   const cached = getCache(key);
   if (cached) return cached;
 
-  const text = await fetchText(`${PROXY_PREFIX}/`);
-  const regex = /\[([^\]]+)\]\((http:\/\/www\.eczaneler\.gen\.tr\/nobetci-[^)]+)\s+"[^"]*"\)\((\d+)\)/g;
+  const html = await fetchHTML(`${ORIGIN}/`);
+  const $ = cheerio.load(html);
 
   const cities = [];
-  for (const m of text.matchAll(regex)) {
-    const city = m[1].trim();
-    const href = m[2].trim();
-    const count = Number(m[3] || 0);
-    const slug = href.split('/').pop().replace('nobetci-', '');
-    cities.push({ city, slug, approxCount: count });
-  }
+  $('a[href*="/nobetci-"]').each((i, el) => {
+    const $el = $(el);
+    const href = $el.attr('href');
+    const city = $el.text().trim();
+
+    if (href && city && href.includes('/nobetci-')) {
+      const slug = href.split('/').pop().replace('nobetci-', '');
+      cities.push({ city, slug, approxCount: 0 });
+    }
+  });
 
   setCache(key, cities);
   return cities;
-}
-
-function splitDutySections(md) {
-  const cleaned = md
-    .replace(/!\[Image[^\]]*\]\([^\)]*\)/g, '')
-    .replace(/\r/g, '');
-
-  const rangeRe = /(\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(?:Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\s+akşamından\s+\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(?:Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\s+sabahına\s+kadar\.?)/gi;
-  const ranges = [...cleaned.matchAll(rangeRe)].map((m) => ({ text: m[1], idx: m.index || 0 }));
-
-  if (!ranges.length) return [{ rangeText: null, block: cleaned }];
-
-  const out = [];
-  for (let i = 0; i < ranges.length; i++) {
-    const start = ranges[i].idx + ranges[i].text.length;
-    const end = i + 1 < ranges.length ? ranges[i + 1].idx : cleaned.length;
-    out.push({ rangeText: ranges[i].text, block: cleaned.slice(start, end) });
-  }
-  return out;
-}
-
-function pickActiveSection(md) {
-  const sections = splitDutySections(md);
-  const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
-  const now = new Date();
-  const tomorrow = new Date(Date.now() + 24*60*60*1000);
-  const markerToday = `${now.getDate()} ${trMonths[now.getMonth()]}`;
-  const markerTomorrow = `${tomorrow.getDate()} ${trMonths[tomorrow.getMonth()]}`;
-
-  let selected = sections.find((s) => {
-    const t = (s.rangeText || '').toLowerCase();
-    return t.includes(markerToday) && t.includes(markerTomorrow);
-  });
-
-  if (!selected) {
-    selected = sections.find((s) => (s.rangeText || '').toLowerCase().includes(markerToday));
-  }
-
-  if (!selected) selected = sections[sections.length - 1];
-
-  const pageDateMatch = md.replace(/\s+/g, ' ').match(/\((\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+(?:Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar))\)/i);
-
-  return {
-    dutyRangeText: selected?.rangeText || null,
-    pageDateText: pageDateMatch ? pageDateMatch[1] : null,
-    block: selected?.block || md,
-    sectionsCount: sections.length
-  };
-}
-
-function parsePharmaciesFromMarkdown(block) {
-
-  const linkRe = /\[([^\]]+)\]\((https?:\/\/www\.eczaneler\.gen\.tr\/eczane\/[^)]+)\)/g;
-  const matches = [...block.matchAll(linkRe)];
-  const items = [];
-
-  for (let i = 0; i < matches.length; i++) {
-    const cur = matches[i];
-    const next = matches[i + 1];
-
-    const name = cur[1].trim();
-
-
-    const start = (cur.index ?? 0) + cur[0].length;
-    const end = next ? (next.index ?? block.length) : block.length;
-    const rowBlock = block.slice(start, end);
-
-    const lines = rowBlock
-      .split('\n')
-      .map((l) => l.replace(/[*_`>#]/g, '').trim())
-      .filter(Boolean);
-
-    let address = null;
-    let note = null;
-    let district = null;
-    let phone = null;
-
-    for (const line of lines) {
-      if (!phone) {
-        const p = line.match(/(0\s*\(\d{3}\)\s*\d{3}[\-\s]?\d{2}[\-\s]?\d{2}|0\s*\d{3}\s*\d{3}\s*\d{2}\s*\d{2}|\+90\s*\d{3}\s*\d{3}\s*\d{2}\s*\d{2})/);
-        if (p) {
-          phone = p[0].replace(/\s+/g, ' ').trim();
-          continue;
-        }
-      }
-
-      if (!note && line.startsWith('»')) {
-        note = line.replace(/^»\s*/, '').trim();
-        continue;
-      }
-
-      if (!address && /\//.test(line)) {
-        address = line;
-        continue;
-      }
-
-      if (!district && !/\//.test(line) && line.length < 40) {
-        district = line;
-      }
-    }
-
-    if (!district && address) {
-      const m = address.match(/([^\/]+)\s*\/\s*[^\/]+$/);
-      if (m) district = m[1].trim();
-    }
-
-    // İlçe normalizasyonu
-    if (district) {
-      district = district.replace(/\s+/g, ' ').trim();
-      if (/^Merkez\s+/i.test(district)) district = 'Merkez';
-      if (/\s+Merkez$/i.test(district)) district = district.replace(/\s+Merkez$/i, '').trim() || 'Merkez';
-    }
-
-    items.push({
-      name,
-      district,
-      phone,
-      address,
-      note
-    });
-  }
-
-  return items;
 }
 
 async function fetchCityPharmacies(slug, forceRefresh = false) {
@@ -198,31 +79,107 @@ async function fetchCityPharmacies(slug, forceRefresh = false) {
   }
 
   try {
-    const md = await fetchText(`${PROXY_PREFIX}/nobetci-${slug}`);
-    const active = pickActiveSection(md);
-    const pharmacies = parsePharmaciesFromMarkdown(active.block);
+    const html = await fetchHTML(`${ORIGIN}/nobetci-${slug}`);
+    const $ = cheerio.load(html);
+
+    // Nöbetçi dönem metinlerini al (alert-warning div'ler)
+    const dutyRangeTexts = [];
+    $('.alert-warning').each((i, el) => {
+      const text = $(el).text().trim();
+      if (text) dutyRangeTexts.push(text);
+    });
+
+    // Aktif dönemi bul (bugün veya yarının tarihini içeren)
+    const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
+    const trDays = { 'pazar': 'Pazar', 'pazartesi': 'P.tesi', 'salı': 'Salı', 'çarşamba': 'Çarş', 'perşembe': 'Perş', 'cuma': 'Cuma', 'cumartesi': 'C.tesi' };
+    const now = new Date();
+    const tomorrow = new Date(Date.now() + 24*60*60*1000);
+    const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
+    const markerToday = fmt(now).toLowerCase();
+    const markerTomorrow = fmt(tomorrow).toLowerCase();
+
+    let dutyRangeText = dutyRangeTexts.find(t =>
+      t.toLowerCase().includes(markerToday) && t.toLowerCase().includes(markerTomorrow)
+    ) || dutyRangeTexts.find(t =>
+      t.toLowerCase().includes(markerToday)
+    ) || dutyRangeTexts[dutyRangeTexts.length - 1] || null;
+
+    // Eczane satırlarını parse et
+    const pharmacies = [];
+    $('td.border-bottom').each((i, el) => {
+      const $row = $(el);
+      const $isim = $row.find('.isim').first();
+      const name = $isim.text().trim();
+
+      if (!name) return;
+
+      // Adres bilgisi - ikinci col-lg-6 div
+      const $addressDiv = $row.find('.col-lg-6').first();
+      const addressHtml = $addressDiv.html() || '';
+      const addressLines = $addressDiv.contents().filter((i, el) => el.nodeType === 3).map((i, el) => $(el).text().trim()).get();
+
+      let address = null;
+      let note = null;
+
+      // Adres satırlarını kontrol et
+      for (const line of addressLines) {
+        if (line && line.length > 10 && !line.includes('»')) {
+          address = line;
+          break;
+        }
+      }
+
+      // Not kontrolü (» ile başlayan)
+      const $italic = $addressDiv.find('.font-italic');
+      if ($italic.length) {
+        note = $italic.text().trim();
+      }
+
+      // İlçe bilgisi - bg-info ve bg-secondary span'ler
+      let district = null;
+      const $districts = $addressDiv.find('span[class*="bg-"]');
+      if ($districts.length >= 2) {
+        district = $districts.eq(1).text().trim();
+      } else if ($districts.length === 1) {
+        district = $districts.eq(0).text().trim();
+      }
+
+      // Telefon numarası - col-lg-3 div, regex ile çıkar
+      const phoneText = $row.find('.col-lg-3').text().trim() || '';
+      const phoneMatch = phoneText.match(/0\s*\(\d{3}\)\s*\d{3}[\-\s]?\d{2}[\-\s]?\d{2}|0\s*\d{3}\s*\d{3}\s*\d{2}\s*\d{2}|\+90\s*\d{3}\s*\d{3}\s*\d{2}\s*\d{2}/);
+      const phone = phoneMatch ? phoneMatch[0].replace(/\s+/g, ' ').trim() : null;
+
+      // İlçe normalizasyonu
+      if (district) {
+        district = district.replace(/\s+/g, ' ').trim();
+        if (/^Merkez\s+/i.test(district)) district = 'Merkez';
+        if (/\s+Merkez$/i.test(district)) district = district.replace(/\s+Merkez$/i, '').trim() || 'Merkez';
+      }
+
+      pharmacies.push({
+        name,
+        district,
+        phone,
+        address,
+        note
+      });
+    });
 
     const out = {
       ok: true,
       citySlug: slug,
       fetchedAt: new Date().toISOString(),
       count: pharmacies.length,
-      dutyRangeText: active.dutyRangeText,
-      pageDateText: active.pageDateText,
-      sectionsCount: active.sectionsCount,
+      dutyRangeText: dutyRangeText,
+      pageDateText: null,
+      sectionsCount: 1,
       stale: false,
       fromCacheFallback: false,
       pharmacies
     };
 
-    // Basit stale kontrolü: sayfada bugün/yarın metni yoksa şüpheli kabul et
-    const trMonths = ['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
-    const now = new Date();
-    const tomorrow = new Date(Date.now() + 24*60*60*1000);
-    const fmt = (d) => `${d.getDate()} ${trMonths[d.getMonth()]}`;
-    const markerToday = fmt(now);
-    const markerTomorrow = fmt(tomorrow);
-    const fullText = `${active.dutyRangeText || ''} ${active.pageDateText || ''}`.toLowerCase();
+    // Stale kontrolü
+    const fullText = (dutyRangeText || '').toLowerCase();
     if (fullText && !fullText.includes(markerToday) && !fullText.includes(markerTomorrow)) {
       out.stale = true;
     }
@@ -260,48 +217,67 @@ async function refreshAllCities() {
   console.log(`[refresh] ${cities.length} şehir güncellendi`);
 }
 
-function startAutoRefresh() {
-  if (!ENABLE_CITY_AUTO_REFRESH) return;
+// Bir sonraki güncelleme saatini hesapla (12:00 veya 23:59)
+function getNextRefreshTime() {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
 
-  refreshAllCities().catch((e) => {
-    console.error(`[refresh] ilk yenileme hatası: ${e.message}`);
-  });
+  // Bugünkü 12:00 geçtiyse, 23:59'u bekle, yoksa 12:00'ı bekle
+  let targetHour, targetMinute;
 
-  setInterval(() => {
-    refreshAllCities().catch((e) => {
-      console.error(`[refresh] periyodik yenileme hatası: ${e.message}`);
-    });
-  }, CITY_AUTO_REFRESH_MS);
-}
-
-
-async function refreshAllCities() {
-  const allCities = await fetchCityIndex();
-  const cities = allCities.filter((c) => c.slug !== 'kibris');
-
-  for (const city of cities) {
-    try {
-      await fetchCityPharmacies(city.slug, true);
-    } catch (e) {
-      console.error(`[refresh] ${city.slug} yenilenemedi: ${e.message}`);
-    }
+  if (currentHour < 12 || (currentHour === 12 && currentMinute === 0)) {
+    targetHour = 12;
+    targetMinute = 0;
+  } else if (currentHour < 23 || (currentHour === 23 && currentMinute < 59)) {
+    targetHour = 23;
+    targetMinute = REFRESH_MINUTE;
+  } else {
+    // 23:59'i geçtik, yarının 12:00'ını bekle
+    targetHour = 12;
+    targetMinute = 0;
   }
 
-  console.log(`[refresh] ${cities.length} şehir güncellendi`);
+  const target = new Date(now);
+  target.setHours(targetHour, targetMinute, 0, 0);
+
+  // Eğer hedef zaman geçmişse, bir sonraki güne ayarla
+  if (target <= now) {
+    target.setDate(target.getDate() + 1);
+  }
+
+  return target;
+}
+
+function scheduleNextRefresh() {
+  const nextTime = getNextRefreshTime();
+  const now = new Date();
+  const delay = nextTime - now;
+
+  console.log(`[refresh] Sonraki güncelleme: ${nextTime.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })} (${Math.round(delay / 60000)} dakika sonra)`);
+
+  setTimeout(async () => {
+    console.log(`[refresh] Planlanan güncelleme başladı: ${new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })}`);
+    try {
+      await refreshAllCities();
+    } catch (e) {
+      console.error(`[refresh] Planlanan güncelleme hatası: ${e.message}`);
+    }
+    // Bir sonraki güncellemeyi planla
+    scheduleNextRefresh();
+  }, delay);
 }
 
 function startAutoRefresh() {
   if (!ENABLE_CITY_AUTO_REFRESH) return;
 
+  // Başlangıçta bir kez çalıştır (cache'i doldurmak için)
   refreshAllCities().catch((e) => {
-    console.error(`[refresh] ilk yenileme hatası: ${e.message}`);
+    console.error(`[refresh] Başlangıç güncellemesi hatası: ${e.message}`);
   });
 
-  setInterval(() => {
-    refreshAllCities().catch((e) => {
-      console.error(`[refresh] periyodik yenileme hatası: ${e.message}`);
-    });
-  }, CITY_AUTO_REFRESH_MS);
+  // Sonra planlı güncellemeleri başlat
+  scheduleNextRefresh();
 }
 
 app.get('/health', (_req, res) => {
@@ -323,7 +299,7 @@ app.get('/api/nobetci/:city', async (req, res) => {
   try {
     const slug = String(req.params.city || '').toLowerCase().trim();
     // Varsayılanı true yaptık: her istek güncel çekim
-    const refresh = String(req.query.refresh || 'true') === 'true';
+    const refresh = String(req.query.refresh || 'false') === 'true';
 
     const data = await fetchCityPharmacies(slug, refresh);
     res.json(data);
@@ -343,7 +319,7 @@ app.get('/api/nobetci-all', async (req, res) => {
     const results = [];
     for (const c of selected) {
       try {
-        const refresh = String(req.query.refresh || 'true') === 'true';
+        const refresh = String(req.query.refresh || 'false') === 'true';
         const cityData = await fetchCityPharmacies(c.slug, refresh);
         results.push({ city: c.city, slug: c.slug, count: cityData.count, pharmacies: cityData.pharmacies });
       } catch (e) {
